@@ -36,7 +36,7 @@ STARTING_VELOCITY_DIRECTION_VARIATION = 0.0 # Rotate the starting velocities by 
 
 PHYSICS_STEPS_PER_FRAME = 4
 DEBUG_OUTPUT = False
-SHOW_FPS = True
+SHOW_FPS = False
 FPS_FRAME_INTERVAL = 10000
 
 ANGLE_OFFSET_INTEGRAL_STEPS = 1000  # More steps = more possible reflection offsets but is more expensive computationally
@@ -567,6 +567,13 @@ if __name__ == '__main__':
                     if collision_location != None:
                         # Calculate surface normal
                         surface_normal = calculate_normal(collision_location, 3)
+                        
+                        # If stuck, try to move directly away from the wall.
+                        if horse.is_stuck():
+                            new_velocity = surface_normal / np.linalg.norm(surface_normal) * np.linalg.norm(horse.get_velocity())
+                            update_horse_velocity(horse, new_velocity)
+                            continue
+                            
                         # To avoid getting stuck in walls, don't reflect if currently moving away from wall.
                         if np.dot(horse.get_velocity(), surface_normal) < 0.0:
                             # Calculate reflected velocity
@@ -613,6 +620,23 @@ if __name__ == '__main__':
                             relative_position_vector += (np.array(horse.get_image_numpy().shape[:2]) - np.array(other_horse.get_image_numpy().shape[:2])) / 2.0
                             relative_position_vector = relative_position_vector / np.linalg.norm(relative_position_vector)
                             
+                            # If a horse thinks it's stuck, have them go directly away from each other
+                            if horse.is_stuck() or other_horse.is_stuck():
+                                new_velocity_1 = relative_position_vector / np.linalg.norm(relative_position_vector) * np.linalg.norm(horse.get_velocity())
+                                new_velocity_2 = -1 * relative_position_vector / np.linalg.norm(relative_position_vector) * np.linalg.norm(other_horse.get_velocity())
+                                update_horse_velocity(horse, new_velocity_1)
+                                update_horse_velocity(other_horse, new_velocity_2)
+                                continue
+                            
+                            # Test if horses are approaching eachother
+                            projected_velocity_1 = np.dot(horse.get_velocity(), relative_position_vector) * relative_position_vector
+                            projected_velocity_2 = np.dot(other_horse.get_velocity(), relative_position_vector) * relative_position_vector
+                            
+                            # They aren't approaching eachother if they aren't going in the same direction and other_horse is not approaching horse (different direction as relative_position_vector)
+                            if np.dot(projected_velocity_1, projected_velocity_2) < 0.0 and np.dot(projected_velocity_2, relative_position_vector) < 0.0:
+                                # If they are moving away, don't do any velocity updates
+                                continue
+                            
                             # Calculate reflected velocity.
                             reflected_velocity_1 = reflect(horse.get_velocity(), relative_position_vector)
                             reflected_velocity_2 = reflect(other_horse.get_velocity(), -1 * relative_position_vector)
@@ -623,6 +647,16 @@ if __name__ == '__main__':
                             if ENABLE_HORSE_COLLISION_REFLECTION_OFFSET:
                                 offset_velocity_1 = rotate_vector(offset_velocity_1, specular_reflection_random_offset(REFLECTION_EXPONENT))
                                 offset_velocity_2 = rotate_vector(offset_velocity_2, specular_reflection_random_offset(REFLECTION_EXPONENT))
+                                
+                            # Test if horses are now approaching each other
+                            projected_velocity_1 = np.dot(offset_velocity_1, relative_position_vector) * relative_position_vector
+                            projected_velocity_2 = np.dot(offset_velocity_2, relative_position_vector) * relative_position_vector
+                            
+                            # They are approaching eachother if they aren't going in the same direction and other_horse is approaching horse (same direction as relative_position_vector)
+                            if np.dot(projected_velocity_1, projected_velocity_2) < 0.0 and np.dot(projected_velocity_2, relative_position_vector) > 0.0:
+                                # Stop them from approaching eachother with slight push away from eachother.
+                                offset_velocity_1 = offset_velocity_1 - 1.1 * projected_velocity_1
+                                offset_velocity_2 = offset_velocity_2 - 1.1 * projected_velocity_2
                             
                             # Save reflected velocity
                             update_horse_velocity(horse, offset_velocity_1)
