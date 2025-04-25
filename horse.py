@@ -26,7 +26,10 @@ class Horse:
         self.update_buffer = [None for i in range(UPDATE_BUFFER_SIZE)]
         self.update_buffer_index = 0
         
-        
+    # Get name of horse sprite file
+    def get_name(self):
+        return self.horse_name
+    
     # Set position of sprite.
     def set_position(self, x, y):
         self.position = [float(x), float(y)]
@@ -100,6 +103,4 @@ class Horse:
         average_update_time_difference = average_update_time_difference / float(update_count)
         
         am_i_stuck = average_update_time_difference < STUCK_FREQUENCY_REQUIREMENT
-        if am_i_stuck:
-            print(self.horse_name, "STUCK!!!!")
         return am_i_stuck
