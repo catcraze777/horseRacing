@@ -44,6 +44,7 @@ REFLECTION_EXPONENT = 10.0      # Higher exponent = smaller random offset range
 ENABLE_HORSE_COLLISION = True
 ENABLE_HORSE_COLLISION_REFLECTION_OFFSET = False
 USE_VORONOI_FOR_HORSE_COLLISIONS = False    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
+BACKSTEP_SCALAR = 3.0   # Determines how far a horse travels backwards briefly if a velocity update occurs. Used to prevent horses from getting stuck upon collision
 
 ###
 #
@@ -122,7 +123,7 @@ if __name__ == '__main__':
     image_sizes = np.array([image.shape for image in player_images_numpy])
     max_size = np.max(image_sizes, axis=0)
 
-    # Create padding for speeding up convolution colission calculations
+    # Create padding for speeding up convolution collision calculations
     arena_image_padded = np.pad(arena_image_numpy, ((max_size[0], max_size[0]),
                                                     (max_size[1], max_size[1]),
                                                     (0, 0)))
@@ -223,13 +224,22 @@ if __name__ == '__main__':
 
 
 
-    # Bounce a horse directly backwards with uniformly random offset within [-random_range, random_range] degrees.
-    def reverse_velocity(horse, random_range):
-        # Rotate by 180 degrees plus random uniform angle variation
-        rotation_theta = math.pi * (180.0 + random.uniform(-random_range, random_range)) / 180.0
+    # Reverse the direction of a velocity with uniformly random offset within [-random_range, random_range] degrees.
+    def reverse_velocity(velocity, random_range):
+        new_velocity = -1 * np.array(velocity)
+        if abs(random_range) > 0:
+            # Rotate by 180 degrees plus random uniform angle variation
+            rotation_theta = math.pi * (random.uniform(-random_range, random_range)) / 180.0
 
-        # Rotate velocity vector
-        new_velocity = rotate_vector(horse.get_velocity(), rotation_theta)
+            # Rotate velocity vector
+            new_velocity = rotate_vector(horse.get_velocity(), rotation_theta)
+            
+        return new_velocity
+    
+    # Bounce a horse directly backwards with uniformly random offset within [-random_range, random_range] degrees.
+    def reverse_horse_velocity(horse, random_range):
+        # Create new velocity vector
+        new_velocity = reverse_velocity(horse.get_velocity(), random_range)
         
         # Apply rotated velocity vector
         horse.set_velocity(new_velocity[0], new_velocity[1])
@@ -493,20 +503,26 @@ if __name__ == '__main__':
                     for horse in player_horses:
                         neighbooring_horses[horse] = player_horses
                 
-            # Store horses that need to be updated.
+            # Store horses whose velocities need to be updated
             update_horses = dict()
-            update_horses_velocity_count = dict()
+            
+            # Update the dict with new velocities
+            def update_horse_velocity(horse, new_velocity):
+                if horse in update_horses.keys():
+                    update_horses[horse] += new_velocity
+                else:
+                    update_horses[horse] = new_velocity
             
             # Loop through all horses
             i = 0
             for horse in player_horses:
                 # Move horse based on velocity
-                horse.velocity_tick(time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
+                #horse.velocity_tick(time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
                 
                 # Check if horse is hitting a wall.
                 if is_colliding(horse):
                     # We collided, step backwards so we aren't colliding anymore
-                    horse.velocity_tick(-2 * time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
+                    #horse.velocity_tick(-2 * time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
                     
                     # If known collision location and surface normal can be calculated, reflect perfectly.
                     if collision_location != None:
@@ -520,8 +536,8 @@ if __name__ == '__main__':
                             offset_velocity = reflected_velocity
                             if ENABLE_REFLECTION_OFFSET:
                                 offset_velocity = rotate_vector(offset_velocity, specular_reflection_random_offset(REFLECTION_EXPONENT))
-                            # Apply reflected velocity
-                            horse.set_velocity(offset_velocity[0], offset_velocity[1])
+                            # Save reflected velocity
+                            update_horse_velocity(horse, offset_velocity)
                         
                         # Slightly nudge velocity away from wall if a collision occurs while traveling away from wall.
                         else:
@@ -529,14 +545,16 @@ if __name__ == '__main__':
                             old_magnitude = np.linalg.norm(horse.get_velocity())
                             new_velocity = horse.get_velocity() + (surface_normal * old_magnitude / 10.0)
                             # Conserve original speed
-                            new_velocity_x, new_velocity_y = (new_velocity / np.linalg.norm(new_velocity)) * old_magnitude
+                            new_velocity = (new_velocity / np.linalg.norm(new_velocity)) * old_magnitude
                             # Update velocity
-                            horse.set_velocity(new_velocity_x, new_velocity_y)
+                            update_horse_velocity(horse, new_velocity)
                     
                     # Unknown surface normal, just go backwards.
                     else:
                         # Reverse velocity with uniform offset
-                        reverse_velocity(horse, 80.0)
+                        new_velocity = reverse_velocity(horse.get_velocity(), 80.0)
+                        # Update velocity
+                        update_horse_velocity(horse, new_velocity)
                     
                     #new_velocity_x = (1.2 ** random.uniform(-1,1)) * horse.get_velocity()[0]
                     #new_velocity_y = (1.2 ** random.uniform(-1,1)) * horse.get_velocity()[1]
@@ -568,19 +586,8 @@ if __name__ == '__main__':
                                 offset_velocity_2 = rotate_vector(offset_velocity_2, specular_reflection_random_offset(REFLECTION_EXPONENT))
                             
                             # Save reflected velocity
-                            if horse in update_horses.keys():
-                                update_horses[horse] += offset_velocity_1
-                                update_horses_velocity_count[horse] += 1
-                            else:
-                                update_horses[horse] = offset_velocity_1
-                                update_horses_velocity_count[horse] = 1
-                                
-                            if other_horse in update_horses.keys():
-                                update_horses[other_horse] += offset_velocity_2
-                                update_horses_velocity_count[other_horse] += 1
-                            else:
-                                update_horses[other_horse] = offset_velocity_2
-                                update_horses_velocity_count[other_horse] = 1
+                            update_horse_velocity(horse, offset_velocity_1)
+                            update_horse_velocity(other_horse, offset_velocity_2)
                         
                         
                 # Debug output
@@ -589,14 +596,23 @@ if __name__ == '__main__':
                 # Update current horse number, for debugging output
                 i += 1
                 
-            # Update velocities of all horses that collided with each other.
-            for horse in update_horses.keys():
-                new_velocity = update_horses[horse] / update_horses_velocity_count[horse]
-                
-                # We collided, step backwards so we aren't colliding anymore
-                horse.velocity_tick(-5 * time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
-                
-                horse.set_velocity(new_velocity[0], new_velocity[1])
+            # Perform a physics tick update.
+            for horse in player_horses:
+                # Update velocities of all horses that collided with something.
+                if horse in update_horses.keys():
+                    # New velocity is equal to the sum of velocity updates normalized to match the original speed before the update.
+                    new_velocity = update_horses[horse] / np.linalg.norm(update_horses[horse]) * np.linalg.norm(horse.get_velocity())
+                    
+                    # We collided with something, step backwards so we aren't colliding anymore
+                    if BACKSTEP_SCALAR > 0.0:
+                        original_position = (np.array(horse.get_position()) / BACKSTEP_SCALAR).astype(int)
+                        while np.all((np.array(horse.get_position()) / BACKSTEP_SCALAR).astype(int) == original_position):
+                            horse.velocity_tick(-1 * time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
+                    
+                    horse.set_velocity(new_velocity[0], new_velocity[1])
+                    
+                # Update positions.
+                horse.velocity_tick(time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
              
         for horse in player_horses:
             # Draw horse to screen
