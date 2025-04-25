@@ -36,7 +36,7 @@ STARTING_VELOCITY_DIRECTION_VARIATION = 0.0 # Rotate the starting velocities by 
 
 PHYSICS_STEPS_PER_FRAME = 4
 DEBUG_OUTPUT = False
-SHOW_FPS = False
+SHOW_FPS = True
 FPS_FRAME_INTERVAL = 10000
 
 ANGLE_OFFSET_INTEGRAL_STEPS = 1000  # More steps = more possible reflection offsets but is more expensive computationally
@@ -46,6 +46,7 @@ ENABLE_HORSE_COLLISION = True
 ENABLE_HORSE_COLLISION_REFLECTION_OFFSET = False
 USE_VORONOI_FOR_HORSE_COLLISIONS = False    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
 BACKSTEP_SCALAR = 3.0   # Determines how far a horse travels backwards briefly if a velocity update occurs. Used to prevent horses from getting stuck upon collision
+COLLISION_UPSCALING = 10     # Perform integer upscaling on the alpha channel images used for horse collisions. Simulates higher resolution sprites and positions at the cost of more expensive calculations.
 
 USE_GOAL = True
 GOAL_FILENAME = 'goal.png'
@@ -74,6 +75,11 @@ if __name__ == '__main__':
     ###
     
     last_tick = 0.0
+    
+    # Ensure COLLISION_UPSCALING is formatted correctly
+    COLLISION_UPSCALING = int(round(COLLISION_UPSCALING))
+    if COLLISION_UPSCALING < 1:
+        COLLISION_UPSCALING = 1
 
     # The battle arena
     arena_image_numpy = cv2.imread(ARENA_FILENAME, cv2.IMREAD_UNCHANGED)
@@ -199,22 +205,18 @@ if __name__ == '__main__':
             # Note that although we can determine if a collision occurs here but 
             #   numpy is quicker at determining that so we arent' doing that.
             if is_collision:
-                collision_center_x = 0.0
-                collision_center_y = 0.0
-                collision_count = 0.0
+                # Create array of coordinate positions
+                width, height = collision_intersection.shape
+                collision_center_y, collision_center_x = np.mgrid[:width, :height].astype(float)
                 
-                for y in range(collision_intersection.shape[0]):
-                    for x in range(collision_intersection.shape[1]):
-                        # If this pixel shows a collision...
-                        if collision_intersection[y,x] > 0.0:
-                            # Add pixel center to weighted average
-                            collision_center_x += float(x) * collision_intersection[y,x]
-                            collision_center_y += float(y) * collision_intersection[y,x]
-                            collision_count += collision_intersection[y,x]
-                            
-                # Calculate weighted average of center points
+                # Weight each position by the collision intensity
+                collision_center_x = np.sum(collision_center_x * collision_intersection)
+                collision_center_y = np.sum(collision_center_y * collision_intersection)
+                collision_count = np.sum(collision_intersection)
+
+                # Calculate weighted average of collision points
                 collision_center_x = collision_center_x / collision_count
-                collision_center_y = collision_center_y / collision_count
+                collision_center_y = collision_center_y / collision_count 
                 collision_location = [int(collision_center_x + pos_x), int(collision_center_y + pos_y)]
             else:
                 # No collision, no definitive location
@@ -400,12 +402,12 @@ if __name__ == '__main__':
     # Calculate if two horses overlap
     def do_horses_collide(horse1, horse2):
         # Calculate bounding boxes
-        horse1_position = np.array(horse1.get_position()).astype(int)
-        horse1_size = np.array(horse1.get_image_numpy().shape[:2])
+        horse1_position = (np.array(horse1.get_position()) * COLLISION_UPSCALING).astype(int)
+        horse1_size = np.array(horse1.get_image_numpy().shape[:2]) * COLLISION_UPSCALING
         horse1_bounding_corners = [horse1_position, horse1_position + horse1_size]
         
-        horse2_position = np.array(horse2.get_position()).astype(int)
-        horse2_size = np.array(horse2.get_image_numpy().shape[:2])
+        horse2_position = (np.array(horse2.get_position()) * COLLISION_UPSCALING).astype(int)
+        horse2_size = np.array(horse2.get_image_numpy().shape[:2]) * COLLISION_UPSCALING
         horse2_bounding_corners = [horse2_position, horse2_position + horse2_size]
         
         # Calculate overlapping section
@@ -426,17 +428,29 @@ if __name__ == '__main__':
         # Calculate overlap with respect to horse2's sprite. This must exist if the previous overlap did
         x_overlap_2, y_overlap_2 = bounding_box_overlap(horse2_bounding_corners, horse1_bounding_corners)
         
-        # Get each horse's alpha channel based on the overlap
-        horse1_overlap = horse1.get_image_numpy()[x_overlap_1[0]:x_overlap_1[1], y_overlap_1[0]:y_overlap_1[1], 3]
-        horse2_overlap = horse2.get_image_numpy()[x_overlap_2[0]:x_overlap_2[1], y_overlap_2[0]:y_overlap_2[1], 3]
+        # Get each horse's alpha channel
+        horse1_overlap = horse1.get_image_numpy()[:,:, 3]
+        horse2_overlap = horse2.get_image_numpy()[:,:, 3]
         
-        assert(horse1_overlap.shape == horse2_overlap.shape)
+        # Integer upscale to simulate higher precision
+        horse1_overlap = cv2.resize(horse1_overlap, horse1_size, interpolation=cv2.INTER_NEAREST)
+        horse2_overlap = cv2.resize(horse2_overlap, horse2_size, interpolation=cv2.INTER_NEAREST)
+        
+        # Get the overlapping section
+        horse1_overlap = horse1_overlap[x_overlap_1[0]:x_overlap_1[1], y_overlap_1[0]:y_overlap_1[1]]
+        horse2_overlap = horse2_overlap[x_overlap_2[0]:x_overlap_2[1], y_overlap_2[0]:y_overlap_2[1]]
+        
+        # If sizes differ due to collision upscaling, try to rectify it and set them to the same overlapping area
+        if horse1_overlap.shape != horse2_overlap.shape:
+            min_size = np.min(np.array([horse1_overlap.shape, horse2_overlap.shape]), axis=0)
+            horse1_overlap = horse1_overlap[:min_size[0], :min_size[1]]
+            horse2_overlap = horse2_overlap[:min_size[0], :min_size[1]]
         
         # Like arena collision, these horses overlap if both alpha pixels are > 0.0, so their product must be > 0.0
         multiply_overlap = horse1_overlap * horse2_overlap
         
-        # Return that a collision occured if any overlap pixel > 0.0
-        return np.max(multiply_overlap) > 0.0
+        # Return that a collision occured if any overlap pixel > 0.0 and ensure non-zero shape
+        return np.min(multiply_overlap.shape) > 0 and np.max(multiply_overlap) > 0.0
         
         
     

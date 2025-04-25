@@ -17,7 +17,7 @@ class Horse:
         
     # Set position of sprite.
     def set_position(self, x, y):
-        self.position = [x, y]
+        self.position = [float(x), float(y)]
     
     # Get position of sprite.
     def get_position(self):
@@ -26,11 +26,11 @@ class Horse:
     # Translate sprite by specified delta per axis.
     def translate(self, delta_x, delta_y):
         curr_x, curr_y = self.get_position()
-        self.set_position(curr_x + delta_x, curr_y + delta_y)
+        self.set_position(curr_x + float(delta_x), curr_y + float(delta_y))
         
     # Set the sprite velocity.
     def set_velocity(self, x, y):
-        self.velocity = [x,y]
+        self.velocity = [float(x),float(y)]
         
     # Get the sprite velocity.
     def get_velocity(self):
