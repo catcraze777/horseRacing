@@ -574,7 +574,7 @@ if __name__ == '__main__':
                         if horse.is_stuck():
                             new_velocity = surface_normal / np.linalg.norm(surface_normal) * np.linalg.norm(horse.get_velocity())
                             update_horse_velocity(horse, new_velocity)
-                            print(current_tick, ": ", horse.get_name(), "is stuck on a wall. New velocity:", new_velocity)
+                            debug_print(current_tick, ": ", horse.get_name(), "is stuck on a wall. New velocity:", new_velocity)
                             continue
                             
                         # To avoid getting stuck in walls, don't reflect if currently moving away from wall.
@@ -638,9 +638,9 @@ if __name__ == '__main__':
                                 new_velocity_2 = -1 * relative_position_vector / np.linalg.norm(relative_position_vector) * np.linalg.norm(other_horse.get_velocity())
                                 update_horse_velocity(horse, new_velocity_1)
                                 update_horse_velocity(other_horse, new_velocity_2)
-                                print(current_tick, ": ", horse.get_name(), "and", other_horse.get_name(), "are stuck together.")
-                                print(current_tick, ": ", horse.get_name(), "new velocity:", new_velocity_1)
-                                print(current_tick, ": ", other_horse.get_name(), "new velocity:", new_velocity_2)
+                                debug_print(current_tick, ": ", horse.get_name(), "and", other_horse.get_name(), "are stuck together.")
+                                debug_print(current_tick, ": ", horse.get_name(), "new velocity:", new_velocity_1)
+                                debug_print(current_tick, ": ", other_horse.get_name(), "new velocity:", new_velocity_2)
                                 continue
                             
                             # Calculate reflected velocity.
