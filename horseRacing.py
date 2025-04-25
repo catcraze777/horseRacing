@@ -32,10 +32,11 @@ PLAYER_FILENAME_PREFIX = 'piece_'
 PLAYER_FILENAME_SUFFIX = '.png'
 STARTING_POSITIONS_FILENAME = 'starting_positions.txt'
 STARTING_VELOCITY = [350, 0]
+STARTING_VELOCITY_DIRECTION_VARIATION = 0.0 # Rotate the starting velocities by a random amount sampled uniformly within [-STARTING_VELOCITY_DIRECTION_VARIATION, STARTING_VELOCITY_DIRECTION_VARIATION] degrees
 
 PHYSICS_STEPS_PER_FRAME = 4
 DEBUG_OUTPUT = False
-SHOW_FPS = True
+SHOW_FPS = False
 FPS_FRAME_INTERVAL = 10000
 
 ANGLE_OFFSET_INTEGRAL_STEPS = 1000  # More steps = more possible reflection offsets but is more expensive computationally
@@ -45,6 +46,13 @@ ENABLE_HORSE_COLLISION = True
 ENABLE_HORSE_COLLISION_REFLECTION_OFFSET = False
 USE_VORONOI_FOR_HORSE_COLLISIONS = False    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
 BACKSTEP_SCALAR = 3.0   # Determines how far a horse travels backwards briefly if a velocity update occurs. Used to prevent horses from getting stuck upon collision
+
+USE_GOAL = True
+GOAL_FILENAME = 'goal.png'
+GOAL_POSITION = [137, 600]
+WINNER_OUTLINE = True
+WINNER_OUTLINE_THICKNESS = 3
+WINNER_OUTLINE_COLOR = (1.0, 1.0, 0) # Uses decimal RGB (Multiplies alpha channel by this color)
 
 ###
 #
@@ -122,6 +130,21 @@ if __name__ == '__main__':
         
     image_sizes = np.array([image.shape for image in player_images_numpy])
     max_size = np.max(image_sizes, axis=0)
+    
+    # Goal sprite
+    goal_horse = None
+    goal_image_numpy = None
+    goal_image_pygame = None
+    
+    if USE_GOAL:
+        goal_horse = Horse(GOAL_FILENAME)
+        goal_image_numpy = goal_horse.get_image_numpy()
+        goal_image_pygame = goal_horse.get_image_pygame()
+        goal_horse.set_position(GOAL_POSITION[0], GOAL_POSITION[1])
+        
+    # Track if a horse won or not
+    winning_horse = None
+    winning_horse_outline = None
 
     # Create padding for speeding up convolution collision calculations
     arena_image_padded = np.pad(arena_image_numpy, ((max_size[0], max_size[0]),
@@ -232,7 +255,7 @@ if __name__ == '__main__':
             rotation_theta = math.pi * (random.uniform(-random_range, random_range)) / 180.0
 
             # Rotate velocity vector
-            new_velocity = rotate_vector(horse.get_velocity(), rotation_theta)
+            new_velocity = rotate_vector(new_velocity, rotation_theta)
             
         return new_velocity
     
@@ -422,6 +445,14 @@ if __name__ == '__main__':
     # Frame length queue, used to calculate average framerate
     framelength_queue = Queue()
     framelength_sum = 0.0
+    
+    # Randomly vary horse starting velocities.
+    STARTING_VELOCITY_DIRECTION_VARIATION = abs(STARTING_VELOCITY_DIRECTION_VARIATION)
+    if STARTING_VELOCITY_DIRECTION_VARIATION > 0.0:
+        for horse in player_horses:
+            rotation_theta = math.pi * (random.uniform(-STARTING_VELOCITY_DIRECTION_VARIATION, STARTING_VELOCITY_DIRECTION_VARIATION)) / 180.0
+            new_velocity_x, new_velocity_y = rotate_vector(horse.get_velocity(), rotation_theta)
+            horse.set_velocity(new_velocity_x, new_velocity_y)
 
 
 
@@ -516,14 +547,8 @@ if __name__ == '__main__':
             # Loop through all horses
             i = 0
             for horse in player_horses:
-                # Move horse based on velocity
-                #horse.velocity_tick(time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
-                
                 # Check if horse is hitting a wall.
                 if is_colliding(horse):
-                    # We collided, step backwards so we aren't colliding anymore
-                    #horse.velocity_tick(-2 * time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
-                    
                     # If known collision location and surface normal can be calculated, reflect perfectly.
                     if collision_location != None:
                         # Calculate surface normal
@@ -613,9 +638,43 @@ if __name__ == '__main__':
                     
                 # Update positions.
                 horse.velocity_tick(time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
-             
+        
+        # Check goal collisions to determine a winner.
+        if USE_GOAL and winning_horse is None:
+            goal_horse.draw_to_surface(screen)
+            
+            # Check to see if any horse is touching the goal.
+            for horse in player_horses:
+                # Does this horse collide with the goal?
+                if do_horses_collide(horse, goal_horse):
+                    # Yes! This horse is now the winner.
+                    winning_horse = horse
+                    
+                    # Begin creating the winner's outline.
+                    winning_horse_outline_alpha_channel = np.pad(horse.get_image_numpy()[:,:,3], WINNER_OUTLINE_THICKNESS)
+                    
+                    # Perform an image dilation.
+                    outline_filter = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2*WINNER_OUTLINE_THICKNESS, 2*WINNER_OUTLINE_THICKNESS))
+                    winning_horse_outline_alpha_channel = cv2.dilate(winning_horse_outline_alpha_channel, outline_filter)
+                    
+                    # Create the image
+                    height, width = winning_horse_outline_alpha_channel.shape
+                    winning_horse_outline_img = np.full((height, width, 4), 255, dtype=np.uint8)
+                    # Set outline color
+                    winning_horse_outline_img[:,:,:3] = winning_horse_outline_img[:,:,:3] * WINNER_OUTLINE_COLOR
+                    # Set outline transparency
+                    winning_horse_outline_img[:,:,3] = winning_horse_outline_img[:,:,3] * (winning_horse_outline_alpha_channel / np.max(winning_horse_outline_alpha_channel))
+                    
+                    # Convert the numpy image into a pygame Canvas to draw to screen
+                    winning_horse_outline = pygame.image.frombuffer(winning_horse_outline_img.tobytes(), winning_horse_outline_img.shape[1::-1], 'RGBA')
+                    
+        # Else if a winning horse exists, draw it's stored outline
+        elif winning_horse is not None and winning_horse_outline is not None:
+            outline_position = np.array(winning_horse.get_position()) - np.array((WINNER_OUTLINE_THICKNESS, WINNER_OUTLINE_THICKNESS))
+            screen.blit(winning_horse_outline, tuple(outline_position))
+        
+        # Draw all horses to the screen.
         for horse in player_horses:
-            # Draw horse to screen
             horse.draw_to_surface(screen)
         
         # Frame over, this is no longer the current tick
