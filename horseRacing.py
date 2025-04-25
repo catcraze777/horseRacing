@@ -89,6 +89,7 @@ if __name__ == '__main__':
 
     # Initialize pygame
     pygame.init()
+    pygame.font.init()
     
     # Set window size to match size of arena image
     screen = pygame.display.set_mode((arena_image_numpy.shape[1], arena_image_numpy.shape[0]))
@@ -465,6 +466,8 @@ if __name__ == '__main__':
     # Frame length queue, used to calculate average framerate
     framelength_queue = Queue()
     framelength_sum = 0.0
+    framerate_font = pygame.font.SysFont('Arial Bold', 24)
+    framerate_text_sprite = None
     
     # Randomly vary horse starting velocities.
     STARTING_VELOCITY_DIRECTION_VARIATION = abs(STARTING_VELOCITY_DIRECTION_VARIATION)
@@ -509,7 +512,9 @@ if __name__ == '__main__':
             
             # If non-zero average_framelength, display FPS
             if average_framelength > 0.0:
-                print("FPS:", 1.0 / (average_framelength / 1000.0))
+                fps_string = "FPS: " + str(round(1.0 / (average_framelength / 1000.0), 2))
+                print(fps_string)
+                framerate_text_sprite = framerate_font.render(fps_string, False, (255, 255, 0))
         
         # Draw arena
         screen.blit(arena_image_pygame, (0,0))
@@ -742,6 +747,9 @@ if __name__ == '__main__':
         # Draw all horses to the screen.
         for horse in player_horses:
             horse.draw_to_surface(screen)
+            
+        if framerate_text_sprite is not None:
+            screen.blit(framerate_text_sprite, (10,10))
         
         # Frame over, this is no longer the current tick
         last_tick = current_tick
