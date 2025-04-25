@@ -36,7 +36,7 @@ STARTING_VELOCITY_DIRECTION_VARIATION = 0.0 # Rotate the starting velocities by 
 
 PHYSICS_STEPS_PER_FRAME = 4
 DEBUG_OUTPUT = False
-SHOW_FPS = False
+SHOW_FPS = True
 FPS_FRAME_INTERVAL = 10000
 
 ANGLE_OFFSET_INTEGRAL_STEPS = 1000  # More steps = more possible reflection offsets but is more expensive computationally
@@ -300,9 +300,13 @@ if __name__ == '__main__':
         average_gradient_x = np.sum(gradient_x)
         average_gradient_y = np.sum(gradient_y)
         
-        
         # Create and normalize the normal vector
         normal_vector = np.array([average_gradient_x, average_gradient_y])
+        
+        # If no gradient found return None
+        if np.linalg.norm(normal_vector) == 0.0:
+            return None
+        
         normal_vector = normal_vector / np.linalg.norm(normal_vector)
         
         # Correct normal vector to face away from the wall edge
@@ -566,9 +570,8 @@ if __name__ == '__main__':
                 # Check if horse is hitting a wall.
                 if is_colliding(horse):
                     # If known collision location and surface normal can be calculated, reflect perfectly.
-                    if collision_location != None:
-                        # Calculate surface normal
-                        surface_normal = calculate_normal(collision_location, 3)
+                    if collision_location != None and (surface_normal := calculate_normal(collision_location, 3)) is not None:
+                        # Note: the surface normal is already calculated into surface_normal in the above condition.
                         
                         # If stuck, try to move directly away from the wall.
                         if horse.is_stuck():
