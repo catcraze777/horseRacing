@@ -9,6 +9,8 @@ import os.path as path
 # For image and matrix manipulation functions.
 import cv2
 import numpy as np
+# For voronoi diagram class.
+import scipy
 # General math and rng functions.
 import math
 import random
@@ -31,7 +33,7 @@ PLAYER_FILENAME_SUFFIX = '.png'
 STARTING_POSITIONS_FILENAME = 'starting_positions.txt'
 STARTING_VELOCITY = [350, 0]
 
-PHYSICS_STEPS_PER_FRAME = 50
+PHYSICS_STEPS_PER_FRAME = 4
 DEBUG_OUTPUT = False
 SHOW_FPS = True
 FPS_FRAME_INTERVAL = 10000
@@ -39,6 +41,9 @@ FPS_FRAME_INTERVAL = 10000
 ANGLE_OFFSET_INTEGRAL_STEPS = 1000  # More steps = more possible reflection offsets but is more expensive computationally
 ENABLE_REFLECTION_OFFSET = True
 REFLECTION_EXPONENT = 10.0      # Higher exponent = smaller random offset range
+ENABLE_HORSE_COLLISION = True
+ENABLE_HORSE_COLLISION_REFLECTION_OFFSET = False
+USE_VORONOI_FOR_HORSE_COLLISIONS = False    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
 
 ###
 #
@@ -343,6 +348,67 @@ if __name__ == '__main__':
 
 
 
+    # Calculate overlap of two bounding boxes specified by two corners. Overlap returned is relative to first bounding box.
+    def bounding_box_overlap(box1, box2):
+        x_overlap = [0, box1[1][0] - box1[0][0]]
+        if box2[1][0] < box1[1][0]:
+            x_overlap[1] = x_overlap[1] - (box1[1][0] - box2[1][0])
+        if box2[0][0] > box1[0][0]:
+            x_overlap[0] = x_overlap[0] + (box2[0][0] - box1[0][0])
+            
+        y_overlap = [0, box1[1][1] - box1[0][1]]
+        if box2[1][1] < box1[1][1]:
+            y_overlap[1] = y_overlap[1] - (box1[1][1] - box2[1][1])
+        if box2[0][1] > box1[0][1]:
+            y_overlap[0] = y_overlap[0] + (box2[0][1] - box1[0][1])
+            
+        return x_overlap, y_overlap
+        
+    # Calculate if two horses overlap
+    def do_horses_collide(horse1, horse2):
+        # Calculate bounding boxes
+        horse1_position = np.array(horse1.get_position()).astype(int)
+        horse1_size = np.array(horse1.get_image_numpy().shape[:2])
+        horse1_bounding_corners = [horse1_position, horse1_position + horse1_size]
+        
+        horse2_position = np.array(horse2.get_position()).astype(int)
+        horse2_size = np.array(horse2.get_image_numpy().shape[:2])
+        horse2_bounding_corners = [horse2_position, horse2_position + horse2_size]
+        
+        # Calculate overlapping section
+        
+        # Calculate overlap with respect to horse1's sprite
+        x_overlap_1, y_overlap_1 = bounding_box_overlap(horse1_bounding_corners, horse2_bounding_corners)
+            
+        # Check if x_overlap_1 doesn't exist
+        if x_overlap_1[0] >= x_overlap_1[1]:
+            return False
+            
+        # Check if y_overlap_1 doesn't exist
+        if y_overlap_1[0] >= y_overlap_1[1]:
+            return False
+            
+        # If we haven't returned False yet, then an overlap might exist
+        
+        # Calculate overlap with respect to horse2's sprite. This must exist if the previous overlap did
+        x_overlap_2, y_overlap_2 = bounding_box_overlap(horse2_bounding_corners, horse1_bounding_corners)
+        
+        # Get each horse's alpha channel based on the overlap
+        horse1_overlap = horse1.get_image_numpy()[x_overlap_1[0]:x_overlap_1[1], y_overlap_1[0]:y_overlap_1[1], 3]
+        horse2_overlap = horse2.get_image_numpy()[x_overlap_2[0]:x_overlap_2[1], y_overlap_2[0]:y_overlap_2[1], 3]
+        
+        assert(horse1_overlap.shape == horse2_overlap.shape)
+        
+        # Like arena collision, these horses overlap if both alpha pixels are > 0.0, so their product must be > 0.0
+        multiply_overlap = horse1_overlap * horse2_overlap
+        
+        # Return that a collision occured if any overlap pixel > 0.0
+        return np.max(multiply_overlap) > 0.0
+        
+        
+    
+    
+    
     # Frame length queue, used to calculate average framerate
     framelength_queue = Queue()
     framelength_sum = 0.0
@@ -356,7 +422,6 @@ if __name__ == '__main__':
     #   GAME LOOP
     #
     ###
-    
     while True:
         # If window closed exit program
         for event in pygame.event.get():
@@ -388,11 +453,53 @@ if __name__ == '__main__':
         # Draw arena
         screen.blit(arena_image_pygame, (0,0))
         
-        # Loop through all horses
-        i = 0
-        for horse in player_horses:
-            # Perform velocity update PHYSICS_STEPS_PER_FRAME times
-            for step in range(PHYSICS_STEPS_PER_FRAME):
+        # Perform velocity update PHYSICS_STEPS_PER_FRAME times
+        for step in range(PHYSICS_STEPS_PER_FRAME):
+            # Determine neighbooring horses for horse collision calculations
+            neighbooring_horses = None
+            if ENABLE_HORSE_COLLISION:
+                neighbooring_horses = dict()
+                horse_positions = np.array([np.array(horse.get_position()) + (np.array(horse.get_image_numpy().shape[:2]) / 2.0) for horse in player_horses])
+                # Are we using a voronoi diagram to only check neighbooring horses?
+                if USE_VORONOI_FOR_HORSE_COLLISIONS:
+                    # Create voronoi diagram to find neighboors
+                    horse_voronoi = None
+                    while horse_voronoi is None:
+                        try:
+                            horse_voronoi = scipy.spatial.Voronoi(horse_positions)
+                        except scipy.spatial._qhull.QhullError:
+                            # Inputs have an edge case of same coordinate value, add slight offset to points and try again.
+                            for i in range(len(horse_positions)):
+                                for j in range(len(horse_positions[i])):
+                                    horse_positions[i][j] += random.random() * 0.001
+                    
+                    # Use ridge_points to find neighbooring horses.
+                    for horse_1, horse_2 in horse_voronoi.ridge_points:
+                        # ridge_points returns point indices, turn them into horse objects.
+                        horse_1 = player_horses[horse_1]
+                        horse_2 = player_horses[horse_2]
+                        # Create empty sets if horse not in dict
+                        if horse_1 not in neighbooring_horses.keys():
+                            neighbooring_horses[horse_1] = set()
+                        if horse_2 not in neighbooring_horses.keys():
+                            neighbooring_horses[horse_2] = set()
+                            
+                        # Add neighbooring horses to each set
+                        neighbooring_horses[horse_1].add(horse_2)
+                        neighbooring_horses[horse_2].add(horse_1)
+                        
+                # Use brute force approach and check every other horse for collisions. 
+                else:
+                    for horse in player_horses:
+                        neighbooring_horses[horse] = player_horses
+                
+            # Store horses that need to be updated.
+            update_horses = dict()
+            update_horses_velocity_count = dict()
+            
+            # Loop through all horses
+            i = 0
+            for horse in player_horses:
                 # Move horse based on velocity
                 horse.velocity_tick(time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
                 
@@ -436,12 +543,62 @@ if __name__ == '__main__':
                     
                     #horse.set_velocity(new_velocity_x, new_velocity_y)
                 
+                # Check horse collisions.
+                if neighbooring_horses is not None:
+                    for other_horse in neighbooring_horses[horse]:
+                        # The same horse will collide with itself.
+                        if horse == other_horse:
+                            continue
+                        # Check if two horses collide.
+                        if do_horses_collide(horse, other_horse):
+                            # Use relative positioning to estimate a reflection normal.
+                            relative_position_vector = np.array(horse.get_position()) - np.array(other_horse.get_position())
+                            relative_position_vector += (np.array(horse.get_image_numpy().shape[:2]) - np.array(other_horse.get_image_numpy().shape[:2])) / 2.0
+                            relative_position_vector = relative_position_vector / np.linalg.norm(relative_position_vector)
+                            
+                            # Calculate reflected velocity.
+                            reflected_velocity_1 = reflect(horse.get_velocity(), relative_position_vector)
+                            reflected_velocity_2 = reflect(other_horse.get_velocity(), -1 * relative_position_vector)
+                            
+                            # Apply random offset if enabled
+                            offset_velocity_1 = reflected_velocity_1
+                            offset_velocity_2 = reflected_velocity_2
+                            if ENABLE_HORSE_COLLISION_REFLECTION_OFFSET:
+                                offset_velocity_1 = rotate_vector(offset_velocity_1, specular_reflection_random_offset(REFLECTION_EXPONENT))
+                                offset_velocity_2 = rotate_vector(offset_velocity_2, specular_reflection_random_offset(REFLECTION_EXPONENT))
+                            
+                            # Save reflected velocity
+                            if horse in update_horses.keys():
+                                update_horses[horse] += offset_velocity_1
+                                update_horses_velocity_count[horse] += 1
+                            else:
+                                update_horses[horse] = offset_velocity_1
+                                update_horses_velocity_count[horse] = 1
+                                
+                            if other_horse in update_horses.keys():
+                                update_horses[other_horse] += offset_velocity_2
+                                update_horses_velocity_count[other_horse] += 1
+                            else:
+                                update_horses[other_horse] = offset_velocity_2
+                                update_horses_velocity_count[other_horse] = 1
+                        
+                        
                 # Debug output
                 debug_print(i, bool(is_colliding(horse)), np.array(horse.get_position(), dtype=int).tolist())
             
-            # Update current horse number, for debugging output
-            i += 1
+                # Update current horse number, for debugging output
+                i += 1
                 
+            # Update velocities of all horses that collided with each other.
+            for horse in update_horses.keys():
+                new_velocity = update_horses[horse] / update_horses_velocity_count[horse]
+                
+                # We collided, step backwards so we aren't colliding anymore
+                horse.velocity_tick(-5 * time_delta/1000.0/PHYSICS_STEPS_PER_FRAME)
+                
+                horse.set_velocity(new_velocity[0], new_velocity[1])
+             
+        for horse in player_horses:
             # Draw horse to screen
             horse.draw_to_surface(screen)
         
