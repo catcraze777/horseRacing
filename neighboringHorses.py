@@ -94,7 +94,9 @@ class VoronoiNeighbors(NeighboringHorsesInterface):
         
         
 
-# Construction is O(n) time, indexing all neighbors of every horse is O(n^2) time but time heavily relies on horse density and velocities.
+# Construction is O(n^2) time, indexing all neighbors of every horse is O(n^2) time but time heavily relies on horse density and velocities.
+# Likely average is O(n) for both construction and neighbors since the number of neighbors determined very rarely exceeds 9 
+# (1 sprite in each cell which is the size of 1 sprite and sprites don't typically overlap)
 class GridNeighbors(NeighboringHorsesInterface):
     def __init__(self, input_horses, extra_size=0):
         assert(extra_size >= 0)
