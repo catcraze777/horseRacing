@@ -309,7 +309,16 @@ if __name__ == '__main__':
                 if USE_VORONOI_FOR_HORSE_COLLISIONS:
                     # Create voronoi diagram to find neighbors
                     neighboring_horses = VoronoiNeighbors(player_horses)
-                        
+                
+                # Are we using grid compartmentalization to check neighboring horses?
+                elif USE_GRID_FOR_HORSE_COLLISIONS:
+                    # Add width/height to grid cell sizes to account for the horses moving during calculations
+                    estimated_movement = np.linalg.norm(STARTING_VELOCITY) * time_delta / 1000.0
+                    # Add extra tolerance just in case
+                    estimated_movement = int(math.ceil(GRID_NEIGHBORS_EXTRA_SPACING_FACTOR * estimated_movement))
+                    # Use grid compartmentalization to find neighbors
+                    neighboring_horses = GridNeighbors(player_horses, estimated_movement)
+                    
                 # Use brute force approach and check every other horse for collisions. 
                 else:
                     neighboring_horses = AllNeighbors(player_horses)

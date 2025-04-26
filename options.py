@@ -23,7 +23,9 @@ ENABLE_HORSE_COLLISION = True
 ENABLE_HORSE_COLLISION_REFLECTION_OFFSET = False
 HORSE_DIVERGENCE_REQUIREMENT = 10.0     # If two horses collide and their velocities are in roughly the same direction within a degree tolerance specified here, apply a small force to push them a part
 HORSE_DIVERGENCE_FACTOR = 0.3       # If two horses meet the above requirement, the force applied scales with this factor
-USE_VORONOI_FOR_HORSE_COLLISIONS = True    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
+USE_VORONOI_FOR_HORSE_COLLISIONS = False    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
+USE_GRID_FOR_HORSE_COLLISIONS = True    # Split space into a grid based on the maximum horse sprite dimensions. Only checks horses that are in neighbooring cells close enough to collide. Unknown time complexity, need to determine later
+GRID_NEIGHBORS_EXTRA_SPACING_FACTOR = 1.5   # Extra space is added to account for expected movement of horses, multiply that expected movement distance by this amount.
 BACKSTEP_SCALAR = 0.0   # Determines how far a horse travels backwards briefly if a velocity update occurs. Used to prevent horses from getting stuck upon collision
 COLLISION_UPSCALING = 10     # Perform integer upscaling on the alpha channel images used for horse collisions. Simulates higher resolution sprites and positions at the cost of more expensive calculations.
 
