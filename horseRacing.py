@@ -9,8 +9,6 @@ import os.path as path
 # For image and matrix manipulation functions.
 import cv2
 import numpy as np
-# For voronoi diagram class.
-import scipy
 # General math and rng functions.
 import math
 import random
@@ -21,41 +19,14 @@ from queue import Queue
 # Custom horse sprite object (see horse.py)
 from horse import Horse
 
-###
-#
-#   OPTIONS
-#
-###
+# Import helper functions
+from horseRacingHelperFuncs import *
 
-ARENA_FILENAME = 'arena.png'
-PLAYER_FILENAME_PREFIX = 'piece_'
-PLAYER_FILENAME_SUFFIX = '.png'
-STARTING_POSITIONS_FILENAME = 'starting_positions.txt'
-STARTING_VELOCITY = [350, 0]
-STARTING_VELOCITY_DIRECTION_VARIATION = 0.0 # Rotate the starting velocities by a random amount sampled uniformly within [-STARTING_VELOCITY_DIRECTION_VARIATION, STARTING_VELOCITY_DIRECTION_VARIATION] degrees
+# Import option constants
+from options import *
 
-PHYSICS_STEPS_PER_FRAME = 4
-DEBUG_OUTPUT = False
-SHOW_FPS = True
-FPS_FRAME_INTERVAL = 10000
-
-ANGLE_OFFSET_INTEGRAL_STEPS = 1000  # More steps = more possible reflection offsets but is more expensive computationally
-ENABLE_REFLECTION_OFFSET = True
-REFLECTION_EXPONENT = 10.0      # Higher exponent = smaller random offset range
-ENABLE_HORSE_COLLISION = True
-ENABLE_HORSE_COLLISION_REFLECTION_OFFSET = False
-HORSE_DIVERGENCE_REQUIREMENT = 10.0     # If two horses collide and their velocities are in roughly the same direction within a degree tolerance specified here, apply a small force to push them a part
-HORSE_DIVERGENCE_FACTOR = 0.3       # If two horses meet the above requirement, the force applied scales with this factor
-USE_VORONOI_FOR_HORSE_COLLISIONS = False    # A voronoi diagram can speed up collision calculations by only checking neighbooring horses (O(n) checks compared to O(n^2)), but diagram construction can make this not worth it. Useful for an especially large number of horses.
-BACKSTEP_SCALAR = 0.0   # Determines how far a horse travels backwards briefly if a velocity update occurs. Used to prevent horses from getting stuck upon collision
-COLLISION_UPSCALING = 10     # Perform integer upscaling on the alpha channel images used for horse collisions. Simulates higher resolution sprites and positions at the cost of more expensive calculations.
-
-USE_GOAL = True
-GOAL_FILENAME = 'goal.png'
-GOAL_POSITION = [137, 600]
-WINNER_OUTLINE = True
-WINNER_OUTLINE_THICKNESS = 3
-WINNER_OUTLINE_COLOR = (1.0, 1.0, 0) # Uses decimal RGB (Multiplies alpha channel by this color)
+# Import neighboring horse datastructures used for collision checks
+from neighboringHorses import *
 
 ###
 #
@@ -159,17 +130,31 @@ if __name__ == '__main__':
     arena_image_padded = np.pad(arena_image_numpy, ((max_size[0], max_size[0]),
                                                     (max_size[1], max_size[1]),
                                                     (0, 0)))
+                                                    
+    # Frame length queue, used to calculate average framerate
+    framelength_queue = Queue()
+    framelength_sum = 0.0
+    framerate_font = pygame.font.SysFont('Arial Bold', 24)
+    framerate_text_sprite = None
 
-
-
-
+    # Randomly vary horse starting velocities.
+    STARTING_VELOCITY_DIRECTION_VARIATION = abs(STARTING_VELOCITY_DIRECTION_VARIATION)
+    if STARTING_VELOCITY_DIRECTION_VARIATION > 0.0:
+        for horse in player_horses:
+            rotation_theta = math.pi * (random.uniform(-STARTING_VELOCITY_DIRECTION_VARIATION, STARTING_VELOCITY_DIRECTION_VARIATION)) / 180.0
+            new_velocity_x, new_velocity_y = rotate_vector(horse.get_velocity(), rotation_theta)
+            horse.set_velocity(new_velocity_x, new_velocity_y)
+    
+    
+    
+    
     
     ###
     #
-    #   HELPER FUNCTIONS
+    #   HELPER FUNCTIONS: These use initialized variables (such as the arena) for calculations and need to be here for now.
     #
     ###
-    
+
     # Check if a horse's alpha channel overlaps with the arena's alpha channel.
     # collision_location is set to a List[int, int] or None to indicate center of all collision pixels
     collision_location = None
@@ -231,47 +216,7 @@ if __name__ == '__main__':
             # Some boundary condition error, assume it is a wall collision
             collision_location = None
             return True
-
-
-
-
-
-    # Rotate a vector by a given amount
-    def rotate_vector(input_vector, delta_theta):
-        # Calculate rotation matrix
-        sin_theta = math.sin(delta_theta)
-        cos_theta = math.cos(delta_theta)
-        rotation_matrix = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
-        
-        # Perform matrix multiplication to rotate vector
-        rotated_vector = np.transpose(rotation_matrix @ np.transpose(np.array([input_vector])))[0]
-        
-        return rotated_vector
-
-
-
-
-
-    # Reverse the direction of a velocity with uniformly random offset within [-random_range, random_range] degrees.
-    def reverse_velocity(velocity, random_range):
-        new_velocity = -1 * np.array(velocity)
-        if abs(random_range) > 0:
-            # Rotate by 180 degrees plus random uniform angle variation
-            rotation_theta = math.pi * (random.uniform(-random_range, random_range)) / 180.0
-
-            # Rotate velocity vector
-            new_velocity = rotate_vector(new_velocity, rotation_theta)
-            
-        return new_velocity
     
-    # Bounce a horse directly backwards with uniformly random offset within [-random_range, random_range] degrees.
-    def reverse_horse_velocity(horse, random_range):
-        # Create new velocity vector
-        new_velocity = reverse_velocity(horse.get_velocity(), random_range)
-        
-        # Apply rotated velocity vector
-        horse.set_velocity(new_velocity[0], new_velocity[1])
-
 
 
 
@@ -308,174 +253,10 @@ if __name__ == '__main__':
         if np.linalg.norm(normal_vector) == 0.0:
             return None
         
-        normal_vector = normal_vector / np.linalg.norm(normal_vector)
+        normal_vector = normalize_vector(normal_vector)
         
         # Correct normal vector to face away from the wall edge
         return -1 * normal_vector
-
-
-
-
-
-    # Perfectly reflect an input vector based on an input surface normal.
-    def reflect(input_vector, normal):
-        # Normalize the normal vector
-        normal = normal / np.linalg.norm(normal)
-        
-        # Calculate input vector projected onto the normal vector
-        input_projected_onto_normal = np.dot(input_vector, normal) * normal
-        
-        # Return reflected vector
-        return -2 * input_projected_onto_normal + input_vector
-
-
-
-
-
-    # Calculate base distribution PDF for specular reflection angle offset
-    specular_reflection_pdf = np.zeros((ANGLE_OFFSET_INTEGRAL_STEPS,))
-    
-    starting_theta = - math.pi / 2.0
-    current_theta = starting_theta
-    theta_step = math.pi / ANGLE_OFFSET_INTEGRAL_STEPS
-    for step in range(ANGLE_OFFSET_INTEGRAL_STEPS):
-        # Calculate "probability" of reflecting to this angle
-        specular_reflection_pdf[step] = math.cos(current_theta)
-        
-        # Advance theta
-        current_theta += theta_step
-        
-    # Store any CDFs created during specular_reflection_random_offset() calls (Memoization kinda)
-    calculated_cdfs = dict()
-        
-    # Specular reflection random theta offset distribution. Based on phong specular reflectance model.
-    def specular_reflection_random_offset(shine_exponent=1.0):
-        exponent_specular_reflection_cdf = None
-        
-        # Did we calculate the CDF of this shine exponent?
-        if shine_exponent in calculated_cdfs.keys():
-            # If yes load the CDF already calculated
-            exponent_specular_reflection_cdf = calculated_cdfs[shine_exponent]
-        else:
-            # If no calculate the CDF and save it for later
-            # Apply specular exponent
-            exponent_specular_reflection_pdf = specular_reflection_pdf ** shine_exponent
-            
-            # Given the above pdf, calculate it's cdf
-            exponent_specular_reflection_cdf = np.zeros((ANGLE_OFFSET_INTEGRAL_STEPS,))
-            exponent_specular_reflection_cdf[0] = exponent_specular_reflection_pdf[0]
-            for i in range(1,ANGLE_OFFSET_INTEGRAL_STEPS):
-                exponent_specular_reflection_cdf[i] = exponent_specular_reflection_cdf[i - 1] + exponent_specular_reflection_pdf[i]
-                
-            # Normalize the cdf to total probability of 1
-            exponent_specular_reflection_cdf = exponent_specular_reflection_cdf / exponent_specular_reflection_cdf[-1]
-            
-            # Save CDF
-            calculated_cdfs[shine_exponent] = exponent_specular_reflection_cdf
-            
-        assert(exponent_specular_reflection_cdf is not None)
-        
-        # Draw from distribution
-        random_number = random.random()
-        
-        # Find index of cdf that is closest to random_number
-        cdf_difference = exponent_specular_reflection_cdf - random_number
-        cdf_difference_abs = np.abs(cdf_difference)
-        closest_index = np.argmin(cdf_difference_abs)
-        
-        # Return theta offset
-        return starting_theta + closest_index * theta_step
-
-
-
-
-
-    # Calculate overlap of two bounding boxes specified by two corners. Overlap returned is relative to first bounding box.
-    def bounding_box_overlap(box1, box2):
-        x_overlap = [0, box1[1][0] - box1[0][0]]
-        if box2[1][0] < box1[1][0]:
-            x_overlap[1] = x_overlap[1] - (box1[1][0] - box2[1][0])
-        if box2[0][0] > box1[0][0]:
-            x_overlap[0] = x_overlap[0] + (box2[0][0] - box1[0][0])
-            
-        y_overlap = [0, box1[1][1] - box1[0][1]]
-        if box2[1][1] < box1[1][1]:
-            y_overlap[1] = y_overlap[1] - (box1[1][1] - box2[1][1])
-        if box2[0][1] > box1[0][1]:
-            y_overlap[0] = y_overlap[0] + (box2[0][1] - box1[0][1])
-            
-        return x_overlap, y_overlap
-        
-    # Calculate if two horses overlap
-    def do_horses_collide(horse1, horse2):
-        # Calculate bounding boxes
-        horse1_position = (np.array(horse1.get_position()) * COLLISION_UPSCALING).astype(int)
-        horse1_size = np.array(horse1.get_image_numpy().shape[:2]) * COLLISION_UPSCALING
-        horse1_bounding_corners = [horse1_position, horse1_position + horse1_size]
-        
-        horse2_position = (np.array(horse2.get_position()) * COLLISION_UPSCALING).astype(int)
-        horse2_size = np.array(horse2.get_image_numpy().shape[:2]) * COLLISION_UPSCALING
-        horse2_bounding_corners = [horse2_position, horse2_position + horse2_size]
-        
-        # Calculate overlapping section
-        
-        # Calculate overlap with respect to horse1's sprite
-        x_overlap_1, y_overlap_1 = bounding_box_overlap(horse1_bounding_corners, horse2_bounding_corners)
-            
-        # Check if x_overlap_1 doesn't exist
-        if x_overlap_1[0] >= x_overlap_1[1]:
-            return False
-            
-        # Check if y_overlap_1 doesn't exist
-        if y_overlap_1[0] >= y_overlap_1[1]:
-            return False
-            
-        # If we haven't returned False yet, then an overlap might exist
-        
-        # Calculate overlap with respect to horse2's sprite. This must exist if the previous overlap did
-        x_overlap_2, y_overlap_2 = bounding_box_overlap(horse2_bounding_corners, horse1_bounding_corners)
-        
-        # Get each horse's alpha channel
-        horse1_overlap = horse1.get_image_numpy()[:,:, 3]
-        horse2_overlap = horse2.get_image_numpy()[:,:, 3]
-        
-        # Integer upscale to simulate higher precision
-        horse1_overlap = cv2.resize(horse1_overlap, horse1_size, interpolation=cv2.INTER_NEAREST)
-        horse2_overlap = cv2.resize(horse2_overlap, horse2_size, interpolation=cv2.INTER_NEAREST)
-        
-        # Get the overlapping section
-        horse1_overlap = horse1_overlap[x_overlap_1[0]:x_overlap_1[1], y_overlap_1[0]:y_overlap_1[1]]
-        horse2_overlap = horse2_overlap[x_overlap_2[0]:x_overlap_2[1], y_overlap_2[0]:y_overlap_2[1]]
-        
-        # If sizes differ due to collision upscaling, try to rectify it and set them to the same overlapping area
-        if horse1_overlap.shape != horse2_overlap.shape:
-            min_size = np.min(np.array([horse1_overlap.shape, horse2_overlap.shape]), axis=0)
-            horse1_overlap = horse1_overlap[:min_size[0], :min_size[1]]
-            horse2_overlap = horse2_overlap[:min_size[0], :min_size[1]]
-        
-        # Like arena collision, these horses overlap if both alpha pixels are > 0.0, so their product must be > 0.0
-        multiply_overlap = horse1_overlap * horse2_overlap
-        
-        # Return that a collision occured if any overlap pixel > 0.0 and ensure non-zero shape
-        return np.min(multiply_overlap.shape) > 0 and np.max(multiply_overlap) > 0.0
-        
-        
-    
-    
-    
-    # Frame length queue, used to calculate average framerate
-    framelength_queue = Queue()
-    framelength_sum = 0.0
-    framerate_font = pygame.font.SysFont('Arial Bold', 24)
-    framerate_text_sprite = None
-    
-    # Randomly vary horse starting velocities.
-    STARTING_VELOCITY_DIRECTION_VARIATION = abs(STARTING_VELOCITY_DIRECTION_VARIATION)
-    if STARTING_VELOCITY_DIRECTION_VARIATION > 0.0:
-        for horse in player_horses:
-            rotation_theta = math.pi * (random.uniform(-STARTING_VELOCITY_DIRECTION_VARIATION, STARTING_VELOCITY_DIRECTION_VARIATION)) / 180.0
-            new_velocity_x, new_velocity_y = rotate_vector(horse.get_velocity(), rotation_theta)
-            horse.set_velocity(new_velocity_x, new_velocity_y)
 
 
 
@@ -521,43 +302,17 @@ if __name__ == '__main__':
         
         # Perform velocity update PHYSICS_STEPS_PER_FRAME times
         for step in range(PHYSICS_STEPS_PER_FRAME):
-            # Determine neighbooring horses for horse collision calculations
-            neighbooring_horses = None
+            # Determine neighboring horses for horse collision calculations
+            neighboring_horses = None
             if ENABLE_HORSE_COLLISION:
-                neighbooring_horses = dict()
-                horse_positions = np.array([np.array(horse.get_position()) + (np.array(horse.get_image_numpy().shape[:2]) / 2.0) for horse in player_horses])
-                # Are we using a voronoi diagram to only check neighbooring horses?
+                # Are we using a voronoi diagram to only check neighboring horses?
                 if USE_VORONOI_FOR_HORSE_COLLISIONS:
-                    # Create voronoi diagram to find neighboors
-                    horse_voronoi = None
-                    while horse_voronoi is None:
-                        try:
-                            horse_voronoi = scipy.spatial.Voronoi(horse_positions)
-                        except scipy.spatial._qhull.QhullError:
-                            # Inputs have an edge case of same coordinate value, add slight offset to points and try again.
-                            for i in range(len(horse_positions)):
-                                for j in range(len(horse_positions[i])):
-                                    horse_positions[i][j] += random.random() * 0.001
-                    
-                    # Use ridge_points to find neighbooring horses.
-                    for horse_1, horse_2 in horse_voronoi.ridge_points:
-                        # ridge_points returns point indices, turn them into horse objects.
-                        horse_1 = player_horses[horse_1]
-                        horse_2 = player_horses[horse_2]
-                        # Create empty sets if horse not in dict
-                        if horse_1 not in neighbooring_horses.keys():
-                            neighbooring_horses[horse_1] = set()
-                        if horse_2 not in neighbooring_horses.keys():
-                            neighbooring_horses[horse_2] = set()
-                            
-                        # Add neighbooring horses to each set
-                        neighbooring_horses[horse_1].add(horse_2)
-                        neighbooring_horses[horse_2].add(horse_1)
+                    # Create voronoi diagram to find neighbors
+                    neighboring_horses = VoronoiNeighbors(player_horses)
                         
                 # Use brute force approach and check every other horse for collisions. 
                 else:
-                    for horse in player_horses:
-                        neighbooring_horses[horse] = player_horses
+                    neighboring_horses = AllNeighbors(player_horses)
                 
             # Store horses whose velocities need to be updated
             update_horses = dict()
@@ -580,7 +335,7 @@ if __name__ == '__main__':
                         
                         # If stuck, try to move directly away from the wall.
                         if horse.is_stuck():
-                            new_velocity = surface_normal / np.linalg.norm(surface_normal) * np.linalg.norm(horse.get_velocity())
+                            new_velocity = normalize_vector(surface_normal) * np.linalg.norm(horse.get_velocity())
                             update_horse_velocity(horse, new_velocity)
                             debug_print(current_tick, ": ", horse.get_name(), "is stuck on a wall. New velocity:", new_velocity)
                             continue
@@ -593,6 +348,18 @@ if __name__ == '__main__':
                             offset_velocity = reflected_velocity
                             if ENABLE_REFLECTION_OFFSET:
                                 offset_velocity = rotate_vector(offset_velocity, specular_reflection_random_offset(REFLECTION_EXPONENT))
+                                # After the offset, ensure it is not moving towards the wall
+                                if (dot_prod := np.dot(offset_velocity, surface_normal)) < 0.0:
+                                    # Calculate velocity approaching wall
+                                    velocity_projection = dot_prod * surface_normal
+                                    # Counter said velocity with a slight extra push
+                                    offset_velocity += - 1.1 * velocity_projection
+                                    # Normalize velocity
+                                    offset_velocity = normalize_vector(offset_velocity)
+                                    
+                                    assert(np.dot(offset_velocity, surface_normal) > 0.0)
+                                    
+                                    
                             # Save reflected velocity
                             update_horse_velocity(horse, offset_velocity)
                         
@@ -602,25 +369,34 @@ if __name__ == '__main__':
                             old_magnitude = np.linalg.norm(horse.get_velocity())
                             new_velocity = horse.get_velocity() + (surface_normal * old_magnitude / 10.0)
                             # Conserve original speed
-                            new_velocity = (new_velocity / np.linalg.norm(new_velocity)) * old_magnitude
+                            new_velocity = normalize_vector(new_velocity) * old_magnitude
                             # Update velocity
                             update_horse_velocity(horse, new_velocity)
                     
-                    # Unknown surface normal, just go backwards.
+                    # Unknown surface normal, try to approach the other horses and reenter the arena.
                     else:
-                        # Reverse velocity with uniform offset
-                        new_velocity = reverse_velocity(horse.get_velocity(), 80.0)
+                        # Add up positional offsets of each other horse to approach.
+                        new_velocity = np.zeros((2,), dtype=float)
+                        curr_position = np.array(horse.get_position())
+                        
+                        # Loop through each horse
+                        for other_horse in player_horses:
+                            # Ensure this isn't the current horse
+                            if other_horse == horse:
+                                continue
+                            
+                            # Calculate vector and scale it to be inversely proportional to the distance between the horses
+                            position_offset = np.array(other_horse.get_position()) - curr_position
+                            new_velocity += position_offset / (np.linalg.norm(position_offset) ** 2)
+                            
+                        # Normalize velocity to match original speed
+                        new_velocity = normalize_vector(new_velocity) * np.linalg.norm(horse.get_velocity())
                         # Update velocity
                         update_horse_velocity(horse, new_velocity)
-                    
-                    #new_velocity_x = (1.2 ** random.uniform(-1,1)) * horse.get_velocity()[0]
-                    #new_velocity_y = (1.2 ** random.uniform(-1,1)) * horse.get_velocity()[1]
-                    
-                    #horse.set_velocity(new_velocity_x, new_velocity_y)
                 
                 # Check horse collisions.
-                if neighbooring_horses is not None:
-                    for other_horse in neighbooring_horses[horse]:
+                if neighboring_horses is not None:
+                    for other_horse in neighboring_horses[horse]:
                         # The same horse will collide with itself.
                         if horse == other_horse:
                             continue
@@ -629,7 +405,7 @@ if __name__ == '__main__':
                             # Use relative positioning to estimate a reflection normal.
                             relative_position_vector = np.array(horse.get_position()) - np.array(other_horse.get_position())
                             relative_position_vector += (np.array(horse.get_image_numpy().shape[:2]) - np.array(other_horse.get_image_numpy().shape[:2])) / 2.0
-                            relative_position_vector = relative_position_vector / np.linalg.norm(relative_position_vector)
+                            relative_position_vector = normalize_vector(relative_position_vector)
                             
                             # Test if horses are approaching eachother
                             projected_velocity_1 = np.dot(horse.get_velocity(), relative_position_vector) * relative_position_vector
@@ -642,8 +418,8 @@ if __name__ == '__main__':
                                 
                             # If a horse thinks it's stuck, have them go directly away from each other
                             if horse.is_stuck() or other_horse.is_stuck():
-                                new_velocity_1 = relative_position_vector / np.linalg.norm(relative_position_vector) * np.linalg.norm(horse.get_velocity())
-                                new_velocity_2 = -1 * relative_position_vector / np.linalg.norm(relative_position_vector) * np.linalg.norm(other_horse.get_velocity())
+                                new_velocity_1 = relative_position_vector * np.linalg.norm(horse.get_velocity())
+                                new_velocity_2 = -1 * relative_position_vector * np.linalg.norm(other_horse.get_velocity())
                                 update_horse_velocity(horse, new_velocity_1)
                                 update_horse_velocity(other_horse, new_velocity_2)
                                 debug_print(current_tick, ": ", horse.get_name(), "and", other_horse.get_name(), "are stuck together.")
@@ -654,8 +430,8 @@ if __name__ == '__main__':
                             # Calculate reflected velocity.
                             reflected_velocity_1 = np.array(horse.get_velocity()) - projected_velocity_1 + projected_velocity_2
                             reflected_velocity_2 = np.array(other_horse.get_velocity()) - projected_velocity_2 + projected_velocity_1
-                            reflected_velocity_1 = reflected_velocity_1 / np.linalg.norm(reflected_velocity_1) * np.linalg.norm(horse.get_velocity())
-                            reflected_velocity_2 = reflected_velocity_2 / np.linalg.norm(reflected_velocity_2) * np.linalg.norm(other_horse.get_velocity())
+                            reflected_velocity_1 = normalize_vector(reflected_velocity_1) * np.linalg.norm(horse.get_velocity())
+                            reflected_velocity_2 = normalize_vector(reflected_velocity_2) * np.linalg.norm(other_horse.get_velocity())
                             
                             # Apply random offset if enabled
                             offset_velocity_1 = reflected_velocity_1
@@ -675,11 +451,11 @@ if __name__ == '__main__':
                                 offset_velocity_2 = offset_velocity_2 - 1.1 * projected_velocity_2
                                 
                             # If still moving in roughly the same direction, have them move apart
-                            if np.dot(offset_velocity_1 / np.linalg.norm(offset_velocity_1), offset_velocity_2 / np.linalg.norm(offset_velocity_2)) > math.cos(math.pi * HORSE_DIVERGENCE_REQUIREMENT / 180.0):
+                            if np.dot(normalize_vector(offset_velocity_1), normalize_vector(offset_velocity_2)) > math.cos(math.pi * HORSE_DIVERGENCE_REQUIREMENT / 180.0):
                                 offset_velocity_1 = offset_velocity_1 + relative_position_vector * HORSE_DIVERGENCE_FACTOR * np.linalg.norm(horse.get_velocity())
                                 offset_velocity_2 = offset_velocity_2 - relative_position_vector * HORSE_DIVERGENCE_FACTOR * np.linalg.norm(other_horse.get_velocity())
-                                offset_velocity_1 = offset_velocity_1 / np.linalg.norm(offset_velocity_1) * np.linalg.norm(horse.get_velocity())
-                                offset_velocity_2 = offset_velocity_2 / np.linalg.norm(offset_velocity_2) * np.linalg.norm(other_horse.get_velocity())
+                                offset_velocity_1 = normalize_vector(offset_velocity_1) * np.linalg.norm(horse.get_velocity())
+                                offset_velocity_2 = normalize_vector(offset_velocity_2) * np.linalg.norm(other_horse.get_velocity())
                             
                             # Save reflected velocity
                             update_horse_velocity(horse, offset_velocity_1)
@@ -697,7 +473,7 @@ if __name__ == '__main__':
                 # Update velocities of all horses that collided with something.
                 if horse in update_horses.keys():
                     # New velocity is equal to the sum of velocity updates normalized to match the original speed before the update.
-                    new_velocity = update_horses[horse] / np.linalg.norm(update_horses[horse]) * np.linalg.norm(horse.get_velocity())
+                    new_velocity = normalize_vector(update_horses[horse]) * np.linalg.norm(horse.get_velocity())
                     
                     # We collided with something, step backwards so we aren't colliding anymore
                     if not horse.is_stuck() and BACKSTEP_SCALAR > 0.0:
