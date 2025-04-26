@@ -186,7 +186,7 @@ if __name__ == '__main__':
             collision_intersection = image_section * horse_collider
             
             # If any of the horse's alpha pixels overlap the arena boundaries, consider it a wall collision
-            is_collision = np.max(collision_intersection) > 0.0
+            is_collision = np.any(collision_intersection > 0.0)
             
             # Calculate center of all weighted collisions 
             # (Gives more influence to opaque pixels instead of transparent ones)

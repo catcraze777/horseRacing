@@ -201,7 +201,7 @@ def do_horses_collide(horse1, horse2):
     multiply_overlap = horse1_overlap * horse2_overlap
     
     # Return that a collision occured if any overlap pixel > 0.0 and ensure non-zero shape
-    return np.min(multiply_overlap.shape) > 0 and np.max(multiply_overlap) > 0.0
+    return np.min(multiply_overlap.shape) > 0 and np.any(multiply_overlap > 0.0)
 
 
 

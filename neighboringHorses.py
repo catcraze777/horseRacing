@@ -105,7 +105,7 @@ class GridNeighbors(NeighboringHorsesInterface):
         temp_dict = dict()
         
         # Calculate each horses' center points
-        horse_positions = np.array([np.array(horse.get_position()) + (np.array(horse.get_image_numpy().shape[:2]) / 2.0) for horse in input_horses])
+        horse_positions = np.array([np.array(horse.get_position()) + (np.array(horse.get_image_numpy().shape[1::-1]) / 2.0) for horse in input_horses])
         
         # Calculate grid resolution
         horse_sprite_sizes = np.array([horse.get_image_numpy().shape for horse in input_horses])
