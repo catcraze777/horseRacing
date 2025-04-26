@@ -171,8 +171,8 @@ if __name__ == '__main__':
         pos_y_padded, pos_x_padded = [ [int(pos_y), int(pos_x)][i] + max_size[i] for i in range(2) ]
         
         # Is horse beyond image boundaries?
-        if (pos_x_padded < 0 or pos_x_padded >= arena_image_padded.shape[1] or
-                pos_y_padded < 0 or pos_y_padded >= arena_image_padded.shape[0]):
+        if (pos_x_padded < 0 or pos_x_padded + size_x >= arena_image_padded.shape[1] or
+                pos_y_padded < 0 or pos_y_padded + size_y >= arena_image_padded.shape[0]):
             # If outside boundaries, consider it a wall collision
             collision_location = None
             return True
