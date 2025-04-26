@@ -181,9 +181,11 @@ def do_horses_collide(horse1, horse2):
     horse1_overlap = horse1.get_image_numpy()[:,:, 3]
     horse2_overlap = horse2.get_image_numpy()[:,:, 3]
     
-    # Integer upscale to simulate higher precision
-    horse1_overlap = cv2.resize(horse1_overlap, horse1_size, interpolation=cv2.INTER_NEAREST)
-    horse2_overlap = cv2.resize(horse2_overlap, horse2_size, interpolation=cv2.INTER_NEAREST)
+    # Downscale calculated overlaps
+    x_overlap_1 = [int(x_overlap_1[0] / float(COLLISION_UPSCALING)), int(math.ceil(x_overlap_1[1] / float(COLLISION_UPSCALING)))]
+    x_overlap_2 = [int(x_overlap_2[0] / float(COLLISION_UPSCALING)), int(math.ceil(x_overlap_2[1] / float(COLLISION_UPSCALING)))]
+    y_overlap_1 = [int(y_overlap_1[0] / float(COLLISION_UPSCALING)), int(math.ceil(y_overlap_1[1] / float(COLLISION_UPSCALING)))]
+    y_overlap_2 = [int(y_overlap_2[0] / float(COLLISION_UPSCALING)), int(math.ceil(y_overlap_2[1] / float(COLLISION_UPSCALING)))]
     
     # Get the overlapping section
     horse1_overlap = horse1_overlap[x_overlap_1[0]:x_overlap_1[1], y_overlap_1[0]:y_overlap_1[1]]
